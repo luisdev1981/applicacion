@@ -13,7 +13,7 @@ if ($accion === 'getCursosInscritos') {
     if ($id_alumno) {
         try {
             $pdo = getDbConexion();
-            $sql = "SELECT c.nombre_curso, ac.estatus, ac.fecha_inscripcion, ac.fecha_completado, c.id as id_curso
+            $sql = "SELECT ac.id as inscripcion_id, c.nombre_curso, ac.estatus, ac.fecha_inscripcion, ac.fecha_completado, c.id as id_curso, ac.calificacion
                     FROM alumnos_cursos ac
                     JOIN cursos c ON ac.idcurso = c.id
                     WHERE ac.idalumno = :idalumno

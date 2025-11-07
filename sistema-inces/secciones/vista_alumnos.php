@@ -63,6 +63,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $puede_modificar) {
     elseif (isset($_POST['accion']) && $_POST['accion'] === 'inscribir') {
         $idalumno = filter_input(INPUT_POST, 'idalumno', FILTER_VALIDATE_INT);
         $idcurso = filter_input(INPUT_POST, 'idcurso', FILTER_VALIDATE_INT);
+    // Acción: ACTUALIZAR ESTADO DE INSCRIPCIÓN
+    } elseif (isset($_POST['accion']) && $_POST['accion'] === 'actualizar_inscripcion') {
+        $inscripcion_id = filter_input(INPUT_POST, 'inscripcion_id', FILTER_VALIDATE_INT);
+        $nuevo_estatus = $_POST['estatus'];
+        $calificacion = filter_input(INPUT_POST, 'calificacion', FILTER_VALIDATE_FLOAT, FILTER_NULL_ON_FAILURE); // Permite decimales
+
+        if ($inscripcion_id && in_array($nuevo_estatus, ['Inscrito', 'Cursando', 'Completado', 'Retirado'])) {
+            try {
+                $sql = "UPDATE alumnos_cursos SET estatus = :estatus, calificacion = :calificacion";
+
+                // Si el nuevo estado es 'Completado' y la fecha de completado no está fijada, la fijamos ahora.
+                if ($nuevo_estatus === 'Completado') {
+                    $sql .= ", fecha_completado = COALESCE(fecha_completado, NOW())";
+                }
+
+                $sql .= " WHERE id = :id";
+
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute([
+                    'estatus' => $nuevo_estatus,
+                    'calificacion' => $calificacion,
+                    'id' => $inscripcion_id
+                ]);
+
+                // Registrar auditoría
+                // registrar_accion('ACTUALIZAR_INSCRIPCION', null, 'alumnos_cursos', $inscripcion_id);
+
+                $mensaje = "Estado de la inscripción actualizado correctamente.";
+
+            } catch (PDOException $e) {
+                $error = "Error al actualizar la inscripción: " . $e->getMessage();
+            }
+        } else {
+            $error = "Datos inválidos para actualizar la inscripción.";
+        }
+    }
 
         if ($idalumno && $idcurso) {
             try {
@@ -252,6 +288,7 @@ function cargarInscripciones(alumnoId, nombreAlumno) {
     document.getElementById('nombreAlumnoInscripcion').textContent = `Alumno: ${nombreAlumno}`;
     document.getElementById('inscripcionAlumnoId').value = alumnoId;
     const listaDiv = document.getElementById('listaCursosInscritos');
+    const puedeModificar = <?php echo json_encode($puede_modificar); ?>;
     listaDiv.innerHTML = '<div class="text-center"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Cargando...</span></div></div>';
 
     fetch(`ajax_handler.php?accion=getCursosInscritos&id=${alumnoId}`)
@@ -259,17 +296,31 @@ function cargarInscripciones(alumnoId, nombreAlumno) {
         .then(data => {
             if (data.status === 'success') {
                 if (data.data.length > 0) {
-                    let html = '<table class="table table-sm table-bordered"><thead><tr><th>Curso</th><th>Estatus</th><th>Inscripción</th><th>Acciones</th></tr></thead><tbody>';
+                    let html = '<table class="table table-sm table-bordered"><thead><tr><th>Curso</th><th>Estado</th><th>Calificación</th><th>Acciones</th></tr></thead><tbody>';
                     data.data.forEach(curso => {
-                        let boton = '';
-                        if (curso.estatus === 'Completado') {
-                            boton = `<a href="certificado.php?idalumno=${alumnoId}&idcurso=${curso.id_curso}" target="_blank" class="btn btn-xs btn-success"><i class="fas fa-certificate"></i> Ver Certificado</a>`;
-                        }
                         html += `<tr>
                                     <td>${curso.nombre_curso}</td>
-                                    <td><span class="badge bg-primary">${curso.estatus}</span></td>
-                                    <td>${new Date(curso.fecha_inscripcion).toLocaleDateString()}</td>
-                                    <td>${boton}</td>
+                                    <form onsubmit="guardarCambiosInscripcion(event, ${curso.inscripcion_id}, ${alumnoId}, '${nombreAlumno}')">
+                                        <td>
+                                            <select name="estatus" class="form-select form-select-sm" ${!puedeModificar ? 'disabled' : ''}>
+                                                <option value="Inscrito" ${curso.estatus === 'Inscrito' ? 'selected' : ''}>Inscrito</option>
+                                                <option value="Cursando" ${curso.estatus === 'Cursando' ? 'selected' : ''}>Cursando</option>
+                                                <option value="Completado" ${curso.estatus === 'Completado' ? 'selected' : ''}>Completado</option>
+                                                <option value="Retirado" ${curso.estatus === 'Retirado' ? 'selected' : ''}>Retirado</option>
+                                            </select>
+                                        </td>
+                                        <td>
+                                            <input type="number" name="calificacion" class="form-control form-control-sm" value="${curso.calificacion || ''}" step="0.01" min="0" max="20" ${!puedeModificar ? 'disabled' : ''}>
+                                        </td>
+                                        <td>`;
+                        if (puedeModificar) {
+                            html += `<button type="submit" class="btn btn-sm btn-primary"><i class="fas fa-save"></i></button> `;
+                        }
+                        if (curso.estatus === 'Completado') {
+                            html += `<a href="certificado.php?idalumno=${alumnoId}&idcurso=${curso.id_curso}" target="_blank" class="btn btn-sm btn-success"><i class="fas fa-certificate"></i></a>`;
+                        }
+                        html += `       </td>
+                                    </form>
                                  </tr>`;
                     });
                     html += '</tbody></table>';
@@ -285,6 +336,30 @@ function cargarInscripciones(alumnoId, nombreAlumno) {
             listaDiv.innerHTML = '<div class="alert alert-danger">Error al cargar los datos.</div>';
             console.error('Error:', error);
         });
+}
+
+function guardarCambiosInscripcion(event, inscripcionId, alumnoId, nombreAlumno) {
+    event.preventDefault();
+    const form = event.target;
+    const formData = new FormData(form);
+    formData.append('accion', 'actualizar_inscripcion');
+    formData.append('inscripcion_id', inscripcionId);
+
+    fetch('vista_alumnos.php', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.text())
+    .then(text => {
+        // Recargar el contenido del modal para reflejar los cambios
+        cargarInscripciones(alumnoId, nombreAlumno);
+        // Opcional: mostrar un mensaje de éxito/error.
+        // Por simplicidad, el mensaje global de la página se actualizará al recargar el modal.
+    })
+    .catch(error => {
+        console.error('Error al guardar:', error);
+        alert('Hubo un error al guardar los cambios.');
+    });
 }
 </script>
 
